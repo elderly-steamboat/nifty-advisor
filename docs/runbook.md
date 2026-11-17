@@ -25,6 +25,7 @@ check_positions(conn, date(2026, 11, 17), cfg)
 
 ## Kronos speed
 - **Kronos-base:** 200 paths over a 25-day horizon took about **10 minutes** on this Mac's CPU
+  (a full first scan, including building 252 days of IV history, took 12 minutes)
   (measured with other work running at the same time).
 - **After the first run:** results are cached in `forecasts/`, so later runs for the same date
   and expiry are instant.
