@@ -31,3 +31,41 @@ def seeded_cfg(tmp_cfg):
     for day in ("2026-11-17", "2023-06-15"):
         ingest_index_file(FIX / f"ind_close_all_{day}.csv", d)
     return tmp_cfg
+
+
+# ---------- synthetic option chain ----------
+import math as _m
+from datetime import date as _date
+
+import numpy as _np
+import pandas as _pd
+
+
+def make_chain(F=24000.0, iv_atm=0.14, skew=-0.5, days=40, d=_date(2026, 11, 18),
+               spikes=None, r=0.065, lo=21000, hi=27000, step=50, lot_size=65):
+    """Chain priced with Black-76 on a linear-in-log-moneyness smile.
+    spikes: {(strike, 'CE'|'PE'): oi} overrides; base OI is a hump around F."""
+    from advisor.analytics import black76_price
+    from advisor.data import Chain
+    from datetime import timedelta
+    expiry = d + timedelta(days=days)
+    t = days / 365.0
+    rows = []
+    for k in range(lo, hi + step, step):
+        k = float(k)
+        iv = max(0.05, iv_atm + skew * _m.log(k / F))
+        for typ in ("CE", "PE"):
+            price = black76_price(F, k, t, r, iv, typ)
+            oi = 60000.0 + 200000.0 * _m.exp(-((k - F) / 1200.0) ** 2)
+            if spikes and (k, typ) in spikes:
+                oi = float(spikes[(k, typ)])
+            rows.append({"date": d, "instrument": "OPT", "expiry": expiry, "strike": k,
+                         "option_type": typ, "open": price, "high": price, "low": price,
+                         "close": price, "settle": round(price, 2), "oi": oi, "chg_oi": 0.0,
+                         "volume": 1000.0, "lot_size": lot_size})
+    return Chain(d, expiry, F, F, lot_size, _pd.DataFrame(rows))
+
+
+@pytest.fixture
+def synthetic_chain():
+    return make_chain()
