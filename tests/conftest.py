@@ -69,3 +69,34 @@ def make_chain(F=24000.0, iv_atm=0.14, skew=-0.5, days=40, d=_date(2026, 11, 18)
 @pytest.fixture
 def synthetic_chain():
     return make_chain()
+
+
+# ---------- slow marker + synthetic index history ----------
+import os as _os
+
+
+def pytest_collection_modifyitems(config, items):
+    if _os.environ.get("RUN_SLOW") == "1":
+        return
+    skip = pytest.mark.skip(reason="slow: set RUN_SLOW=1")
+    for it in items:
+        if "slow" in it.keywords:
+            it.add_marker(skip)
+
+
+def make_index_history(n=600, end=_date(2026, 11, 17), start_px=22000.0, vol=0.01, seed=7):
+    """Synthetic daily OHLCV on weekdays ending at `end` (no holidays)."""
+    from datetime import timedelta
+    rng = _np.random.default_rng(seed)
+    days, d = [], end
+    while len(days) < n:
+        if d.weekday() < 5:
+            days.append(d)
+        d -= timedelta(days=1)
+    days.reverse()
+    closes = start_px * _np.exp(_np.cumsum(rng.normal(0, vol, n)))
+    opens = _np.r_[closes[0], closes[:-1]]
+    highs = _np.maximum(opens, closes) * (1 + _np.abs(rng.normal(0, vol / 2, n)))
+    lows = _np.minimum(opens, closes) * (1 - _np.abs(rng.normal(0, vol / 2, n)))
+    return _pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes,
+                          "volume": _np.full(n, 3e8)}, index=days)
