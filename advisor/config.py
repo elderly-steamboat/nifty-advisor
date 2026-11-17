@@ -47,6 +47,8 @@ class Scoring(_M):
     neutral_band: float
     strong_band: float
     oi_window_pct: float
+    trend_scales: list[float]
+    skew_scale: float
 
     @model_validator(mode="after")
     def _weights_sum(self):

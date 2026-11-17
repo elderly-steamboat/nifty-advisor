@@ -25,6 +25,8 @@ config hash shown with every recommendation. Units: "pts" = Nifty index points,
 | `scoring.neutral_band` | \|score\| below = neutral | score | 20 | 10–30 |
 | `scoring.strong_band` | \|score\| at/above = strong | score | 50 | 40–70 |
 | `scoring.oi_window_pct` | Strike window around spot for PCR & walls | fraction | 0.10 | 0.05–0.15 |
+| `scoring.trend_scales` | Moves mapped to ±1 for close/DMA20, close/DMA50, 20-day change | fraction | 0.02/0.04/0.04 | — |
+| `scoring.skew_scale` | RR25 deviation from 1-yr median mapped to ±1 | vol | 0.02 | 0.01–0.04 |
 | `edge.r_good` | Min implied/Kronos width ratio to trade | ratio | 1.10 | 1.0–1.3 |
 | `edge.ivr_good` | Min IV rank to trade | 0–100 | 30 | 20–50 |
 | `edge.r_naked` / `ivr_naked` | Naked strangle gate | ratio / 0–100 | 1.30 / 50 | stricter only |

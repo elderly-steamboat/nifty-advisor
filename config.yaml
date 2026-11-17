@@ -22,6 +22,8 @@ scoring:
   neutral_band: 20
   strong_band: 50
   oi_window_pct: 0.10
+  trend_scales: [0.02, 0.04, 0.04]   # close vs DMA20, vs DMA50, 20-day change → ±1
+  skew_scale: 0.02                   # RR25 deviation from median (vol) → ±1
 edge: {r_good: 1.10, ivr_good: 30, r_naked: 1.30, ivr_naked: 50, butterfly_width_ratio: 0.6}
 strikes:
   iron_condor: {q: 0.10, delta: 0.20}
