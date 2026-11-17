@@ -100,3 +100,38 @@ def make_index_history(n=600, end=_date(2026, 11, 17), start_px=22000.0, vol=0.0
     lows = _np.minimum(opens, closes) * (1 - _np.abs(rng.normal(0, vol / 2, n)))
     return _pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes,
                           "volume": _np.full(n, 3e8)}, index=days)
+
+
+# ---------- fake Kronos sampler + index writer ----------
+
+def make_fake_sampler(daily_vol=0.01, drift=0.0, counter=None):
+    """GBM sampler with the Sampler signature; deterministic in seed."""
+    def sample(history, future_dates, n_paths, seed):
+        if counter is not None:
+            counter.append(seed)
+        rng = _np.random.default_rng(seed)
+        h = len(future_dates)
+        last = float(history.close.iloc[-1])
+        rets = rng.normal(drift, daily_vol, (n_paths, h))
+        close = last * _np.exp(_np.cumsum(rets, axis=1))
+        wig = _np.abs(rng.normal(0, daily_vol / 3, (n_paths, h)))
+        return _np.stack([close * (1 + wig), close * (1 - wig), close], axis=2)
+    return sample
+
+
+@pytest.fixture
+def fake_sampler():
+    return make_fake_sampler()
+
+
+def write_index_history(cfg, hist, vix=15.0):
+    """Write a synthetic history into cfg.data_dir/index_daily.csv."""
+    from advisor.data import INDEX_COLS
+    df = hist.copy()
+    df.index.name = "date"
+    df = df.reset_index()
+    df["date"] = [d.isoformat() for d in df.date]
+    for c in ("vix_open", "vix_high", "vix_low", "vix_close"):
+        df[c] = vix
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    df[INDEX_COLS].to_csv(cfg.data_dir / "index_daily.csv", index=False)
