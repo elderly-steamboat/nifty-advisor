@@ -135,3 +135,19 @@ def write_index_history(cfg, hist, vix=15.0):
         df[c] = vix
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     df[INDEX_COLS].to_csv(cfg.data_dir / "index_daily.csv", index=False)
+
+
+def uniform_forecast(center=24000.0, half=1000.0, n=401, horizon=5, spot=None,
+                     d=_date(2026, 11, 18), expiry=None):
+    """Forecast whose terminal closes are uniform on [center−half, center+half]; paths flat."""
+    from datetime import timedelta
+    from advisor.forecast import Forecast
+    term = _np.linspace(center - half, center + half, n)
+    closes = _np.tile(term[:, None], (1, horizon))
+    return Forecast(d, expiry or d + timedelta(days=40), spot or center, [d] * horizon,
+                    closes.copy(), closes.copy(), closes, 1.0, {})
+
+
+def cfg_with(cfg, section, **kw):
+    """Copy of a frozen Config with one section's fields replaced."""
+    return cfg.model_copy(update={section: getattr(cfg, section).model_copy(update=kw)})
