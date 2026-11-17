@@ -147,7 +147,9 @@ def _wall_shift(position, chain, enriched, cfg) -> str | None:
             oi = float(row.oi) if row is not None else 0.0
             if oi < (1 - cfg.risk.wall_oi_drop) * oi0:
                 return f"wall shift {side}: OI at {k:.0f} {oi0:.0f} → {oi:.0f}"
-        inside = [w for w in walls[side] if (chain.spot > w > l.strike if side == "put" else chain.spot < w < l.strike)]
+        known = set(position.baseline.get("walls_inside", {}).get(side, []))
+        inside = [w for w in walls[side] if (chain.spot > w > l.strike if side == "put" else chain.spot < w < l.strike)
+                  and w not in known]
         if k is not None and inside:
             return f"wall shift {side}: wall moved inside short to {inside[0]:.0f}"
     return None
@@ -255,15 +257,17 @@ def baseline_for(position: Position, chain, enriched, fc: Forecast, cfg) -> dict
     short sits at/behind (strike + OI), and entry spot."""
     sides = side_metrics(position, chain, enriched, fc, cfg)
     walls = find_walls(enriched, chain.spot, cfg.scoring.oi_window_pct, cfg.walls.oi_multiple, cfg.walls.top_n)
-    w_k, w_oi = {}, {}
+    w_k, w_oi, w_in = {}, {}, {}
     for side, l in _shorts(position).items():
         behind = [w for w in walls[side] if (w <= l.strike if side == "put" else w >= l.strike)]
         if behind:
             k = min(behind, key=lambda w: abs(w - l.strike))
             w_k[side], w_oi[side] = k, float(_row(enriched, SIDE_TYPE[side], k).oi)
+        w_in[side] = sorted(w for w in walls[side]
+                            if (chain.spot > w > l.strike if side == "put" else chain.spot < w < l.strike))
     return {"touch_3d": {s: v["touch_3d"] for s, v in sides.items()},
             "delta": {s: v["delta"] for s, v in sides.items()},
-            "wall_strike": w_k, "wall_oi": w_oi, "entry_spot": chain.spot}
+            "wall_strike": w_k, "wall_oi": w_oi, "walls_inside": w_in, "entry_spot": chain.spot}
 
 
 # ---------- action calls and rolls (§12 exit list, §12.2) ----------
@@ -369,7 +373,27 @@ def apply_roll_to_position(position: Position, roll: Roll) -> Position:
                     position.net_credit + roll.net_cash, position.rolls + 1, dict(position.baseline))
 
 
+def rolled_baseline(position: Position, roll: Roll, chain, enriched, fc: Forecast, cfg) -> dict:
+    """Baseline after a roll: the tested side's entries (touch, delta, walls) are recomputed for
+    the new strikes; the untested side and entry spot keep their entry-day values. Persist it
+    with journal.apply_roll(..., baseline=...)."""
+    new = apply_roll_to_position(position, roll)
+    fresh = baseline_for(new, chain, enriched, fc, cfg)
+    out = json_copy(position.baseline)
+    for key in ("touch_3d", "delta", "wall_strike", "wall_oi", "walls_inside"):
+        out.setdefault(key, {})
+        out[key].pop(roll.side, None)
+        if roll.side in fresh.get(key, {}):
+            out[key][roll.side] = fresh[key][roll.side]
+    out.setdefault("entry_spot", fresh["entry_spot"])
+    return out
+
+
+def json_copy(d: dict) -> dict:
+    return {k: (dict(v) if isinstance(v, dict) else v) for k, v in d.items()}
+
+
 def _roll_ok(position, roll, chain, enriched, fc, d, cfg, events, holidays) -> bool:
     new = apply_roll_to_position(position, roll)
-    new.baseline = baseline_for(new, chain, enriched, fc, cfg)
+    new.baseline = rolled_baseline(position, roll, chain, enriched, fc, cfg)
     return assess(new, chain, enriched, fc, events, d, cfg, holidays).level != "RED"

@@ -48,9 +48,30 @@ class Chain:
 
 # ---------- parsing ----------
 
+UDIFF_REQ = {"TckrSymb", "FinInstrmTp", "TradDt", "XpryDt", "StrkPric", "OptnTp", "OpnPric", "HghPric",
+             "LwPric", "ClsPric", "SttlmPric", "OpnIntrst", "ChngInOpnIntrst", "TtlTradgVol", "NewBrdLotQty"}
+LEGACY_REQ = {"INSTRUMENT", "SYMBOL", "TIMESTAMP", "EXPIRY_DT", "STRIKE_PR", "OPTION_TYP", "OPEN", "HIGH",
+              "LOW", "CLOSE", "SETTLE_PR", "OPEN_INT", "CHG_IN_OI", "CONTRACTS"}
+
+
 def parse_bhavcopy(path: Path) -> pd.DataFrame:
-    """Parse a UDiFF or legacy F&O bhavcopy zip into NIFTY rows with the COLS schema."""
+    """Parse a UDiFF or legacy F&O bhavcopy zip into NIFTY rows with the COLS schema.
+    Any unreadable file or missing column raises DataError('unknown bhavcopy format …')."""
+    try:
+        return _parse_bhavcopy(path)
+    except DataError:
+        raise
+    except Exception as e:  # BadZipFile, KeyError, ValueError, parser errors
+        raise DataError(f"unknown bhavcopy format: {path} ({type(e).__name__}: {e})") from e
+
+
+def _parse_bhavcopy(path: Path) -> pd.DataFrame:
     raw = pd.read_csv(path, compression="zip", dtype=str, keep_default_na=False)
+    cols = set(raw.columns)
+    if "TckrSymb" in cols and not UDIFF_REQ <= cols:
+        raise DataError(f"unknown bhavcopy format: {path} (missing {sorted(UDIFF_REQ - cols)})")
+    if "INSTRUMENT" in cols and not LEGACY_REQ <= cols:
+        raise DataError(f"unknown bhavcopy format: {path} (missing {sorted(LEGACY_REQ - cols)})")
     if "TckrSymb" in raw.columns:
         r = raw[(raw.TckrSymb == "NIFTY") & raw.FinInstrmTp.isin(["IDO", "IDF"])]
         df = pd.DataFrame({
@@ -143,8 +164,10 @@ def _bhav_urls(d: date) -> list[str]:
     return [udiff, legacy] if d >= UDIFF_START else [legacy, udiff]
 
 
-def _fetch(urls: list[str], dest: Path, d: date, what: str, session) -> Path:
-    """Try each URL (3 attempts, backoff); write atomically. 404 on all → 'not published'."""
+def _fetch(urls: list[str], dest: Path, d: date, what: str, session, validate=None) -> Path:
+    """Try each URL (3 attempts, backoff). The body is written to a .part file, checked with
+    validate(path) (raise to reject), then moved into place — a bad body is never cached.
+    404 on all URLs → 'not published'."""
     session = session or _session()
     dest.parent.mkdir(parents=True, exist_ok=True)
     last_err: Exception | None = None
@@ -164,6 +187,12 @@ def _fetch(urls: list[str], dest: Path, d: date, what: str, session) -> Path:
                 continue
             tmp = dest.with_suffix(dest.suffix + ".part")
             tmp.write_bytes(resp.content)
+            if validate is not None:
+                try:
+                    validate(tmp)
+                except Exception as e:
+                    tmp.unlink(missing_ok=True)
+                    raise DataError(f"invalid {what} from {url} for {d.isoformat()}: {e}") from e
             tmp.replace(dest)
             return dest
     if last_err is None:
@@ -176,15 +205,28 @@ def download_bhavcopy(d: date, data_dir: Path, session=None) -> Path:
     dest = Path(data_dir) / "bhavcopy" / f"{d.isoformat()}.csv.zip"
     if dest.exists():
         return dest
-    return _fetch(_bhav_urls(d), dest, d, "bhavcopy", session)
+    def check(p):
+        if parse_bhavcopy(p).empty:
+            raise DataError("no NIFTY rows")
+    return _fetch(_bhav_urls(d), dest, d, "bhavcopy", session, validate=check)
 
 
 def download_index_close(d: date, data_dir: Path, session=None) -> Path:
     """Return the cached ind_close_all file for d (downloading if missing) and ingest it."""
     dest = Path(data_dir) / "indices" / f"{d.isoformat()}.csv"
+
+    def check(p):
+        row = _parse_index_file(p)
+        if not math.isfinite(row["close"]) or not math.isfinite(row["vix_close"]):
+            raise DataError("Nifty 50 or India VIX close missing")
+    if dest.exists():
+        try:
+            check(dest)
+        except Exception:
+            dest.unlink()  # cached file incomplete (e.g. published before VIX row) → fetch again
     if not dest.exists():
         url = f"https://nsearchives.nseindia.com/content/indices/ind_close_all_{d:%d%m%Y}.csv"
-        _fetch([url], dest, d, "index close", session)
+        _fetch([url], dest, d, "index close", session, validate=check)
     ingest_index_file(dest, data_dir)
     return dest
 

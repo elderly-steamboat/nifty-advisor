@@ -151,3 +151,17 @@ def uniform_forecast(center=24000.0, half=1000.0, n=401, horizon=5, spot=None,
 def cfg_with(cfg, section, **kw):
     """Copy of a frozen Config with one section's fields replaced."""
     return cfg.model_copy(update={section: getattr(cfg, section).model_copy(update=kw)})
+
+
+@pytest.fixture
+def seeded_long_cfg(seeded_cfg):
+    """seeded_cfg plus 600 synthetic weekday bars ending 2026-11-16, then the real 2026-11-17 row."""
+    from datetime import date as d_
+    from advisor.data import INDEX_COLS
+    real = _pd.read_csv(seeded_cfg.data_dir / "index_daily.csv")
+    hist = make_index_history(600, end=d_(2026, 11, 16), start_px=25000.0)
+    write_index_history(seeded_cfg, hist)
+    syn = _pd.read_csv(seeded_cfg.data_dir / "index_daily.csv")
+    out = _pd.concat([syn, real[real.date == "2026-11-17"]], ignore_index=True)
+    out[INDEX_COLS].to_csv(seeded_cfg.data_dir / "index_daily.csv", index=False)
+    return seeded_cfg

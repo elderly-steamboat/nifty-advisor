@@ -25,9 +25,10 @@ def test_recommend_stale_data(seeded_cfg, fake_sampler):
     assert not rec.data_ok and "vix" in rec.data_reason and rec.primary is None
 
 
-def test_recommend_runs_on_real_fixture(seeded_cfg, fake_sampler):
-    rec = recommend(D, E, seeded_cfg, sampler=fake_sampler, holidays=HOL, events=[])
-    assert rec.data_ok
+def test_recommend_runs_on_real_fixture(seeded_long_cfg, fake_sampler):
+    rec = recommend(D, E, seeded_long_cfg, sampler=fake_sampler, holidays=HOL, events=[])
+    assert rec.data_ok, rec.data_reason
+    assert rec.ivr_source == "india_vix" and rec.ivr_days >= 200
     assert rec.spot == 25387.4 and rec.direction is not None and rec.edge is not None
     assert rec.selection is not None
     assert rec.primary is not None or rec.selection.no_trade_reason or rec.rejected
@@ -35,16 +36,18 @@ def test_recommend_runs_on_real_fixture(seeded_cfg, fake_sampler):
     assert j["config_hash"] == rec.config_hash and j["date"] == "2026-11-17"
 
 
-def test_recommend_deterministic(seeded_cfg, fake_sampler):
-    a = recommendation_json(recommend(D, E, seeded_cfg, sampler=fake_sampler, holidays=HOL, events=[]))
-    for f in (seeded_cfg.data_dir / "forecasts").glob("*"):
+def test_recommend_deterministic(seeded_long_cfg, fake_sampler):
+    ra = recommend(D, E, seeded_long_cfg, sampler=fake_sampler, holidays=HOL, events=[])
+    assert ra.data_ok, ra.data_reason
+    a = recommendation_json(ra)
+    for f in (seeded_long_cfg.data_dir / "forecasts").glob("*"):
         f.unlink()
-    b = recommendation_json(recommend(D, E, seeded_cfg, sampler=make_fake_sampler(), holidays=HOL, events=[]))
+    b = recommendation_json(recommend(D, E, seeded_long_cfg, sampler=make_fake_sampler(), holidays=HOL, events=[]))
     assert a == b
 
 
-def test_recommend_too_close(seeded_cfg, fake_sampler):
-    rec = recommend(D, date(2026, 11, 23), seeded_cfg, sampler=fake_sampler, holidays=HOL, events=[])
+def test_recommend_too_close(seeded_long_cfg, fake_sampler):
+    rec = recommend(D, date(2026, 11, 23), seeded_long_cfg, sampler=fake_sampler, holidays=HOL, events=[])
     assert rec.primary is None and rec.selection.no_trade_reason == "too close to expiry"
 
 
@@ -86,22 +89,22 @@ def _legs_from_chain(seeded_cfg):
             Leg("CE", 26800.0, "SELL", 1, px("CE", 26800.0)), Leg("CE", 27000.0, "BUY", 1, px("CE", 27000.0))]
 
 
-def test_log_trade_rejects_unknown_leg(seeded_cfg, fake_sampler, tmp_path):
+def test_log_trade_rejects_unknown_leg(seeded_long_cfg, fake_sampler, tmp_path):
     conn = open_db(tmp_path / "j.sqlite")
-    legs = _legs_from_chain(seeded_cfg)
+    legs = _legs_from_chain(seeded_long_cfg)
     legs[1] = Leg("PE", 24210.0, "SELL", 1, 50.0)
     with pytest.raises(ValueError, match="leg not in chain: PE 24210 2026-12-29"):
-        log_trade(conn, D, IRON_CONDOR, E, legs, seeded_cfg, sampler=fake_sampler, holidays=HOL)
+        log_trade(conn, D, IRON_CONDOR, E, legs, seeded_long_cfg, sampler=fake_sampler, holidays=HOL)
     assert conn.execute("select count(*) from trades").fetchone()[0] == 0
 
 
-def test_log_trade_and_check_positions(seeded_cfg, fake_sampler, tmp_path):
+def test_log_trade_and_check_positions(seeded_long_cfg, fake_sampler, tmp_path):
     conn = open_db(tmp_path / "j.sqlite")
-    tid = log_trade(conn, D, IRON_CONDOR, E, _legs_from_chain(seeded_cfg), seeded_cfg,
+    tid = log_trade(conn, D, IRON_CONDOR, E, _legs_from_chain(seeded_long_cfg), seeded_long_cfg,
                     sampler=fake_sampler, holidays=HOL)
     [p] = get_open_positions(conn)
     assert p.baseline["entry_spot"] == 25387.4 and set(p.baseline["delta"]) == {"put", "call"}
-    out = check_positions(conn, D, seeded_cfg, sampler=fake_sampler, holidays=HOL, events=[])
+    out = check_positions(conn, D, seeded_long_cfg, sampler=fake_sampler, holidays=HOL, events=[])
     [(pos, report, action)] = out
     assert report.level in ("GREEN", "AMBER", "RED") and action.kind in ("HOLD", "HOLD_PREPARE", "EXIT", "ADJUST")
     assert len(get_trade(conn, tid)["snapshots"]) == 1

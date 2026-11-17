@@ -28,7 +28,7 @@ from advisor.strategy import (IRON_BUTTERFLY, IRON_CONDOR, NAKED_STRANGLE, Candi
 
 ROOT = Path(__file__).resolve().parents[1]
 METRIC_DAYS = 252          # trailing days of ATM IV / RR25 history for IV rank and skew median
-MIN_METRIC_DAYS = 20       # fewer than this → IV rank falls back to India VIX rank
+MIN_METRIC_DAYS = 200      # IV rank / skew median need this many days; else VIX rank, else no recommendation
 QUANTILES = [0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]
 
 
@@ -43,6 +43,7 @@ class Recommendation:
     atm_iv: float | None = None
     ivr: float | None = None
     ivr_source: str | None = None
+    ivr_days: int | None = None
     direction: DirectionScore | None = None
     edge: Edge | None = None
     selection: Selection | None = None
@@ -126,6 +127,21 @@ def history_metrics(d: date, cfg) -> pd.DataFrame:
     return cache[cache.date.isin(keep)].reset_index(drop=True)
 
 
+def iv_rank_for(d: date, hist: pd.DataFrame, cfg, vix: pd.Series | None = None) -> tuple[float, str, int]:
+    """IV rank on d (§8): today's FRONT-MONTHLY ATM IV within its trailing history when at least
+    MIN_METRIC_DAYS days exist, else India VIX rank with the same minimum, else DataError.
+    Returns (ivr, source, days used)."""
+    h = hist.dropna(subset=["atm_iv"])
+    if len(h) >= MIN_METRIC_DAYS and d.isoformat() in set(h.date):
+        today = float(h[h.date == d.isoformat()].atm_iv.iloc[0])
+        return iv_rank(h.atm_iv, today), "atm_iv", len(h)
+    if vix is None:
+        vix = load_vix_history(d, METRIC_DAYS, cfg.data_dir)
+    if len(vix) >= MIN_METRIC_DAYS:
+        return iv_rank(vix, float(vix.iloc[-1])), "india_vix", len(vix)
+    raise DataError(f"insufficient IV history: {max(len(h), len(vix))} days (need {MIN_METRIC_DAYS}) — refresh more history")
+
+
 # ---------- candidate evaluation with pre-entry downgrade (§10.3) ----------
 
 def _shorts(c: Candidate) -> dict[str, float]:
@@ -199,20 +215,20 @@ def recommend(d: date, expiry: date, cfg, sampler=None, open_margin: float = 0.0
     t = calendar_days_to(d, expiry) / 365.0
     iv = atm_iv(en, chain.future)
     hist = history_metrics(d, cfg)
-    if len(hist.dropna(subset=["atm_iv"])) >= MIN_METRIC_DAYS:
-        ivr, src = iv_rank(hist.atm_iv, iv), "atm_iv"
-    else:
-        vix = load_vix_history(d, METRIC_DAYS, cfg.data_dir)
-        ivr, src = iv_rank(vix, float(vix.iloc[-1])), "india_vix"
+    try:
+        ivr, src, ndays = iv_rank_for(d, hist, cfg)
+    except DataError as e:
+        return Recommendation(data_ok=False, data_reason=str(e), **base)
+    rr_hist = hist.rr25 if hist.rr25.notna().sum() >= MIN_METRIC_DAYS else pd.Series(dtype=float)
     direction = direction_score(chain.spot, implied_move(chain.future, iv, t), fc, en,
-                                load_index_history(d, 60, cfg.data_dir), hist.rr25, cfg)
+                                load_index_history(d, 60, cfg.data_dir), rr_hist, cfg)
     edge = premium_edge(chain.future, iv, t, fc, ivr, cfg)
     sel = select_structures(d, expiry, direction, edge, events, cfg)
     surv, rejected = evaluate_structures(sel.structures, en, chain, fc, events, d, cfg, holidays, open_margin) \
         if sel.structures else ([], [])
     return Recommendation(
         data_ok=True, data_reason=None, spot=chain.spot, future=chain.future, atm_iv=iv, ivr=ivr,
-        ivr_source=src, direction=direction, edge=edge, selection=sel,
+        ivr_source=src, ivr_days=ndays, direction=direction, edge=edge, selection=sel,
         primary=surv[0] if surv else None, alternatives=surv[1:], rejected=rejected,
         quantiles={f"p{int(round(q * 100)):02d}": v for q, v in terminal_quantiles(fc, QUANTILES).items()},
         implied_range=list(implied_range(chain.future, iv, t, 0.10)), lot_size=chain.lot_size, **base)
@@ -257,9 +273,16 @@ def check_positions(conn, d: date, cfg, sampler=None, holidays: set | None = Non
             save_snapshot(conn, pos.trade_id, d, None, None, rep, act)
             out.append((pos, rep, act))
             continue
-        chain = load_chain(d, pos.expiry, cfg)
-        en = enrich_chain(chain, cfg.risk_free_rate)
-        fc = run_forecast(d, pos.expiry, cfg, holidays, sampler)
+        try:
+            chain = load_chain(d, pos.expiry, cfg)
+            en = enrich_chain(chain, cfg.risk_free_rate)
+            fc = run_forecast(d, pos.expiry, cfg, holidays, sampler)
+        except DataError as e:  # one bad position must not hide the others' warnings
+            rep = RiskReport("UNKNOWN", [f"data missing: {e}"], {})
+            act = Action("HOLD_PREPARE", "data missing — check this position manually")
+            save_snapshot(conn, pos.trade_id, d, None, None, rep, act)
+            out.append((pos, rep, act))
+            continue
         rep = assess(pos, chain, en, fc, events, d, cfg, holidays)
         act = decide_action(pos, rep, chain, en, fc, d, cfg, events, holidays)
         save_snapshot(conn, pos.trade_id, d, mark(pos, en), pnl(pos, en), rep, act)

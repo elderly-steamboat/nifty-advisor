@@ -9,7 +9,7 @@ from advisor.engine import recommend, recommendation_json, log_trade, check_posi
 from advisor.journal import open_db
 
 cfg = load_config()
-refresh(date(2026, 11, 1), date.today(), cfg, load_holidays("holidays.yaml"))   # download missing days
+refresh(date(2023, 9, 1), date.today(), cfg, load_holidays("holidays.yaml"))   # first time: ~3 years; later only missing days download
 rec = recommend(date(2026, 11, 17), date(2026, 12, 29), cfg)                    # first run per date+expiry is slow
 print(recommendation_json(rec))
 conn = open_db(cfg.data_dir / "journal.sqlite")
@@ -55,13 +55,18 @@ check_positions(conn, date(2026, 11, 17), cfg)
 
 ## Caches and backups
 - **Safe to delete:** `forecasts/`, `metrics_daily.csv` and `index_daily.csv` are all rebuilt
-  automatically. `index_daily.csv` is rebuilt from `indices/` by re-running `refresh`.
+  automatically. Forecasts are keyed on the exact history and future dates, so editing
+  `holidays.yaml` or fixing index data makes the next scan re-run Kronos. `index_daily.csv` is rebuilt from `indices/` by re-running `refresh`.
 - **Back up regularly:** `journal.sqlite`. It is your trade history. Copy the file while the app
   is closed.
 
 ## When a download fails
-- **What the error looks like:** `DataError` names the date and the URL. Cached files are never
-  overwritten, because downloads write to a temporary file first.
+- **What the error looks like:** `DataError` names the date and the URL.
+- **Bad files are never cached:** each download is checked first (it must parse, and the index
+  file must contain both Nifty 50 and India VIX). A bad file is thrown away. An index file
+  cached without the VIX row is downloaded again on the next refresh.
+- **Old corrupt files:** a file cached before this check existed that won't parse shows as
+  "unknown bhavcopy format". Delete that one file and refresh.
 - **What to do:**
   - Retry later.
   - If it keeps failing, check whether NSE has moved the file: open the URL from the error in a

@@ -105,10 +105,15 @@ class Forecast:
     meta: dict = field(default_factory=dict)
 
 
-def _cache_key(d: date, expiry: date, cfg) -> str:
+def _cache_key(d: date, expiry: date, cfg, dates: list, hist: pd.DataFrame) -> str:
+    """Key covers every input to the sampler: settings, the future dates (so holiday edits
+    change it) and a hash of the exact history values (so corrected data changes it)."""
     kc = cfg.kronos
+    hist_hash = hashlib.sha256(np.ascontiguousarray(hist.to_numpy(np.float64)).tobytes()
+                               + ",".join(str(x) for x in hist.index).encode()).hexdigest()[:16]
     parts = [d.isoformat(), expiry.isoformat(), kc.model_id, kc.tokenizer_id, str(kc.context),
-             str(kc.n_paths), str(kc.base_seed), repr(kc.temperature), repr(kc.top_p), FORECAST_VERSION]
+             str(kc.n_paths), str(kc.base_seed), repr(kc.temperature), repr(kc.top_p), FORECAST_VERSION,
+             ",".join(x.isoformat() for x in dates), hist_hash]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:20]
 
 
@@ -125,14 +130,19 @@ def run_forecast(d: date, expiry: date, cfg, holidays: set, sampler: Sampler | N
     hist = load_index_history(d, cfg.kronos.context, cfg.data_dir)
     if hist.empty or hist.index[-1] != d:
         raise DataError(f"index history does not end on {d.isoformat()} — refresh data")
+    if len(hist) < cfg.kronos.context:
+        raise DataError(f"Kronos needs {cfg.kronos.context} index bars, have {len(hist)} — refresh more history")
+    expected = trading_days_between(hist.index[0], d, holidays) + 1
+    if expected != len(hist):
+        raise DataError(f"index history has gaps: {expected - len(hist)} trading days missing "
+                        f"between {hist.index[0]} and {d} — refresh data (or fix holidays.yaml)")
     horizon = trading_days_between(d, expiry, holidays)
     if horizon < 1:
         raise DataError(f"expiry {expiry} is not after {d}")
     dates = next_trading_days(d, horizon, holidays)
-    cache = Path(cfg.data_dir) / "forecasts" / f"{_cache_key(d, expiry, cfg)}.npz"
-    if cache.exists():
-        raw = np.load(cache)["paths"]
-    else:
+    cache = Path(cfg.data_dir) / "forecasts" / f"{_cache_key(d, expiry, cfg, dates, hist)}.npz"
+    raw = np.load(cache)["paths"] if cache.exists() else None
+    if raw is None or raw.shape[1] != horizon:
         sampler = sampler or kronos_sampler(cfg)
         raw = sampler(hist, dates, cfg.kronos.n_paths, forecast_seed(cfg.kronos.base_seed, d, expiry))
         cache.parent.mkdir(parents=True, exist_ok=True)

@@ -4,9 +4,12 @@ Every number below comes from `config.yaml` (shown as `key`). The code that appl
 rule is named in brackets. Read this file when you want to know *why* the system recommended
 something.
 
-## 1. Data must be complete  [`engine.recommend`, `data.data_status`]
-The system makes no recommendation unless the chosen date has all three of: the F&O bhavcopy,
-the Nifty 50 close, and the India VIX close. The reason is shown instead.
+## 1. Data must be complete  [`engine.recommend`, `data.data_status`, `forecast.run_forecast`]
+The system makes no recommendation unless all of these hold. The reason is shown instead.
+- The chosen date has the F&O bhavcopy, the Nifty 50 close, and the India VIX close.
+- There are at least `kronos.context` (512) daily index bars up to that date.
+- There are no missing trading days in those bars.
+- There are at least 200 days of IV history (front-month ATM IV, or failing that India VIX).
 
 ## 2. Forecast  [`forecast.run_forecast`]
 - Kronos samples `kronos.n_paths` price paths from the chosen date to expiry, using the last
@@ -31,8 +34,10 @@ Bands:
 
 ## 4. Premium edge  [`scoring.premium_edge`]
 - **R** = the market's P10–P90 range width ÷ Kronos's P10–P90 range width.
-- **IV rank** = today's front-month ATM IV within its 1-year range, from 0 to 100. India VIX rank
-  is used instead when there are fewer than 20 days of IV history.
+- **IV rank** = today's front-month ATM IV within its 1-year range, from 0 to 100. It always
+  uses the front month, whichever expiry you pick. India VIX rank is used instead when there
+  are fewer than 200 days of ATM IV history. The report shows which source was used and how
+  many days.
 - The edge is **good** when R ≥ `edge.r_good` and IV rank ≥ `edge.ivr_good`. Otherwise the
   answer is **No trade**.
 
@@ -99,7 +104,9 @@ Bands:
   - short |Δ| > max(`amber_delta`, entry Δ + `amber_delta_add`)
   - a ±`amber_gap` gap would lose more than `amber_gap_loss_mult` × credit
   - an event within `event_days`
-  - the wall behind your short lost more than `wall_oi_drop` of its OI, or moved inside your short
+  - the wall behind your short lost more than `wall_oi_drop` of its OI
+  - a **new** wall appears between spot and your short (walls already there at entry, or after
+    the last roll, don't count)
   - butterfly: spot has covered more than `butterfly_amber_frac` of the distance to breakeven
 - **RED if any of these:**
   - touch > `red_touch` **and** > `red_touch_mult` × the entry-day value
@@ -118,8 +125,13 @@ Bands:
 5. AMBER → **HOLD, prepare**, with the roll that would be used.
 6. Otherwise → **HOLD**.
 
-## 11. Rolls  [`risk.propose_roll`, `journal.apply_roll`]
+**UNKNOWN:** a position whose data can't be loaded (for example, its chain is missing) is shown as
+UNKNOWN with "check manually". The other positions are still checked.
+
+## 11. Rolls  [`risk.propose_roll`, `risk.rolled_baseline`, `journal.apply_roll`]
 - **What moves:** the tested side's short and its wing are closed. A new short opens at
   today's strike rule, with a wing of the same width.
 - **Credit after a roll:** "credit" in every rule becomes the running net credit (all credits
   received minus all debits paid).
+- **Comparison point after a roll:** the tested side's entry-day values (touch probability,
+  delta, walls) are reset to the new strikes. The untested side keeps its original values.

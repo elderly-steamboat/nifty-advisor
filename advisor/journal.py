@@ -114,9 +114,11 @@ def _close_legs(conn, trade_id, legs: list[Leg], prices: dict[int, float], d: da
     return cash
 
 
-def apply_roll(conn, trade_id: int, roll: Roll, d: date, close_prices: dict[int, float]) -> None:
+def apply_roll(conn, trade_id: int, roll: Roll, d: date, close_prices: dict[int, float],
+               baseline: dict | None = None) -> None:
     """Record a roll: close roll.close_legs at close_prices, open roll.open_legs at their prices,
-    add a 'roll' event with the actual net cash, increment rolls."""
+    add a 'roll' event with the actual net cash, increment rolls, and store the updated
+    baseline (from risk.rolled_baseline) when given."""
     with conn:
         cash = _close_legs(conn, trade_id, roll.close_legs, close_prices, d)
         _insert_legs(conn, trade_id, roll.open_legs, d)
@@ -124,6 +126,9 @@ def apply_roll(conn, trade_id: int, roll: Roll, d: date, close_prices: dict[int,
         conn.execute("insert into events(trade_id, date, type, net_cash, reason) values (?,?,?,?,?)",
                      (trade_id, d.isoformat(), "roll", cash, f"roll {roll.side}"))
         conn.execute("update trades set rolls = rolls + 1 where id=?", (trade_id,))
+        if baseline is not None:
+            conn.execute("update trades set baseline_json=? where id=?",
+                         (json.dumps(baseline, sort_keys=True), trade_id))
 
 
 def close_trade(conn, trade_id: int, exit_prices: dict[int, float], d: date, reason: str) -> None:
