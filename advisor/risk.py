@@ -264,3 +264,112 @@ def baseline_for(position: Position, chain, enriched, fc: Forecast, cfg) -> dict
     return {"touch_3d": {s: v["touch_3d"] for s, v in sides.items()},
             "delta": {s: v["delta"] for s, v in sides.items()},
             "wall_strike": w_k, "wall_oi": w_oi, "entry_spot": chain.spot}
+
+
+# ---------- action calls and rolls (§12 exit list, §12.2) ----------
+
+from advisor.calendar import calendar_days_to  # noqa: E402
+from advisor.strategy import PARAMS, choose_wing, pick_short_strike  # noqa: E402
+
+EPS = 1e-9
+
+
+@dataclass
+class Roll:
+    side: str
+    close_legs: list[Leg]
+    open_legs: list[Leg]
+    net_cash: float           # points per unit; > 0 = credit received
+
+
+@dataclass
+class Action:
+    kind: str                 # HOLD | HOLD_PREPARE | EXIT | ADJUST
+    reason: str
+    roll: Roll | None = None
+
+
+def propose_roll(position: Position, side: str, chain, enriched, fc: Forecast, cfg) -> Roll | None:
+    """Roll the tested side out (§12.2): close its short and wing, open a new short at today's
+    strike-selection rule (iron butterflies use strikes.iron_condor) with a wing of the same width.
+    None if the new short is not further from spot or any new leg is illiquid/unlisted."""
+    typ = SIDE_TYPE[side]
+    short = next((l for l in position.legs if l.side == "SELL" and l.option_type == typ), None)
+    if short is None:
+        return None
+    wing = next((l for l in position.legs if l.side == "BUY" and l.option_type == typ), None)
+    key = PARAMS[position.structure][0 if side == "put" else 1]
+    p = getattr(cfg.strikes, "iron_condor" if key in (None, "atm") else key)
+    walls = find_walls(enriched, chain.spot, cfg.scoring.oi_window_pct, cfg.walls.oi_multiple, cfg.walls.top_n)
+    k, _ = pick_short_strike(enriched, fc, side, p.q, p.delta, walls, cfg)
+    if not np.isfinite(k) or not (k < short.strike if side == "put" else k > short.strike):
+        return None
+    row = _row(enriched, typ, k)
+    if row is None or not np.isfinite(row.iv) or row.oi < cfg.liquidity.min_oi:
+        return None
+    new = [Leg(typ, float(k), "SELL", short.lots, float(row.settle))]
+    close = [short]
+    if wing is not None:
+        w = choose_wing(enriched, k, side, abs(short.strike - wing.strike), cfg)
+        if w is None:
+            return None
+        w.lots = wing.lots
+        new = [w] + new
+        close = [wing, short]
+
+    def px(l):
+        r = _row(enriched, l.option_type, l.strike)
+        return float(r.settle) if r is not None else l.price
+
+    close_cost = sum(px(l) if l.side == "SELL" else -px(l) for l in close)
+    open_credit = sum(l.price if l.side == "SELL" else -l.price for l in new)
+    return Roll(side, close, new, open_credit - close_cost)
+
+
+def _tested_side(report: RiskReport) -> str | None:
+    sides = report.metrics.get("sides", {})
+    if not sides:
+        return None
+    return max(sorted(sides), key=lambda s: sides[s].get("touch_3d", 0.0))
+
+
+def decide_action(position: Position, report: RiskReport, chain, enriched, fc: Forecast, d: date, cfg,
+                  events=(), holidays: set = frozenset()) -> Action:
+    """Action call in fixed order (§12): hard stop → RED (adjust if a credit roll leaves it not RED,
+    else exit) → profit target → time exit → AMBER (hold, prepare roll) → hold.
+    Config: exits.hard_stop_mult/profit_target/time_exit_days/max_rolls."""
+    ex, nc = cfg.exits, position.net_credit
+    p = pnl(position, enriched)
+    if nc > 0 and -p >= ex.hard_stop_mult * nc - EPS:
+        return Action("EXIT", "hard stop")
+    if report.level == "RED":
+        side = _tested_side(report)
+        if side and position.rolls < ex.max_rolls:
+            roll = propose_roll(position, side, chain, enriched, fc, cfg)
+            if roll is not None and roll.net_cash > 0:
+                if _roll_ok(position, roll, chain, enriched, fc, d, cfg, events, holidays):
+                    return Action("ADJUST", f"red: roll {side} side", roll)
+        return Action("EXIT", "red")
+    if nc > 0 and p >= ex.profit_target * nc - EPS:
+        return Action("EXIT", "profit target")
+    if calendar_days_to(d, position.expiry) <= ex.time_exit_days:
+        return Action("EXIT", "time exit")
+    if report.level == "AMBER":
+        side = _tested_side(report)
+        roll = propose_roll(position, side, chain, enriched, fc, cfg) if side else None
+        return Action("HOLD_PREPARE", "amber: " + "; ".join(report.triggers), roll)
+    return Action("HOLD", "green")
+
+
+def apply_roll_to_position(position: Position, roll: Roll) -> Position:
+    """New Position after a roll: closed legs removed, new legs added, running credit updated."""
+    closed = {id(l) for l in roll.close_legs}
+    legs = [l for l in position.legs if id(l) not in closed] + list(roll.open_legs)
+    return Position(position.trade_id, position.structure, position.expiry, legs,
+                    position.net_credit + roll.net_cash, position.rolls + 1, dict(position.baseline))
+
+
+def _roll_ok(position, roll, chain, enriched, fc, d, cfg, events, holidays) -> bool:
+    new = apply_roll_to_position(position, roll)
+    new.baseline = baseline_for(new, chain, enriched, fc, cfg)
+    return assess(new, chain, enriched, fc, events, d, cfg, holidays).level != "RED"
