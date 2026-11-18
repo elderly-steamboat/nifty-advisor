@@ -1,0 +1,6 @@
+# Market-moving scheduled events. kind: rbi | budget | fomc | election | other
+# Dates are the decision/announcement day. VERIFY against official calendars (RBI, federalreserve.gov, PIB).
+# History back to 2019 is added in Plan 3.
+- {date: 2026-12-04, name: RBI MPC decision, kind: rbi}
+- {date: 2026-12-09, name: FOMC decision, kind: fomc}
+- {date: 2027-02-01, name: Union Budget, kind: budget}

@@ -1,0 +1,64 @@
+# Nifty Options Advisor configuration. Every rule threshold lives here.
+# See docs/config.md for meaning, unit and safe range of each key.
+capital: 1000000              # INR
+risk_free_rate: 0.065         # annual, continuous
+lot_size_fallback: 65         # used only if bhavcopy lacks lot size; VERIFY against NSE circular
+strike_step: 50               # points
+data_dir: ~/.nifty-advisor
+kronos:
+  model_id: NeoQuasar/Kronos-base
+  tokenizer_id: NeoQuasar/Kronos-Tokenizer-base
+  context: 512
+  n_paths: 200
+  temperature: 1.0
+  top_p: 1.0
+  device: cpu
+  base_seed: 20261118
+calibration: {k: 1.0, window_cycles: 24, target_coverage: 0.80}
+scoring:
+  weights: {kronos_drift: 0.35, oi: 0.25, trend: 0.20, skew: 0.20}
+  pcr_low: 0.7
+  pcr_high: 1.3
+  neutral_band: 20
+  strong_band: 50
+  oi_window_pct: 0.10
+  trend_scales: [0.02, 0.04, 0.04]   # close vs DMA20, vs DMA50, 20-day change → ±1
+  skew_scale: 0.02                   # RR25 deviation from median (vol) → ±1
+edge: {r_good: 1.10, ivr_good: 30, r_naked: 1.30, ivr_naked: 50, butterfly_width_ratio: 0.6}
+strikes:
+  iron_condor: {q: 0.10, delta: 0.20}
+  skewed_favoured: {q: 0.15, delta: 0.25}
+  skewed_other: {q: 0.05, delta: 0.15}
+  credit_spread: {q: 0.20, delta: 0.30}
+  naked_strangle: {q: 0.05, delta: 0.15}
+walls: {oi_multiple: 2.0, top_n: 3, min_delta: 0.08, max_q: 0.025}
+liquidity: {min_oi: 50000, min_volume: 1}
+wings: {widths: [100, 200, 300, 400, 500], min_credit_ratio: 0.25, butterfly_min_credit_ratio: 0.50}
+sizing:
+  defined_risk_pct: 0.02
+  naked_stress_pct: 0.04
+  naked_gap: 0.05
+  max_margin_pct: 0.50
+  naked_margin_per_lot: 200000   # INR, approximate; update from your broker
+risk:
+  window_days: 3
+  event_days: 3
+  amber_touch: 0.15
+  red_touch: 0.30
+  amber_touch_mult: 1.5
+  red_touch_mult: 2.0
+  amber_delta: 0.25
+  red_delta: 0.30
+  amber_delta_add: 0.08
+  red_delta_add: 0.15
+  amber_gap: 0.02
+  amber_gap_loss_mult: 1.0
+  red_loss_mult: 1.5
+  butterfly_amber_frac: 0.5
+  butterfly_red_frac: 0.8
+  wall_oi_drop: 0.30
+  naked: {amber_touch: 0.10, red_touch: 0.20, amber_delta: 0.20, red_delta: 0.25}
+  pre_entry: {touch: 0.20, naked_touch: 0.10, gap: 0.02, gap_loss_mult: 1.0, naked_gap: 0.03, naked_gap_loss_mult: 2.0}
+  stress_moves: [-0.05, -0.03, -0.02, 0.02, 0.03, 0.05]
+  stress_iv_up: 0.03
+exits: {profit_target: 0.50, hard_stop_mult: 2.0, time_exit_days: 7, max_rolls: 2}
