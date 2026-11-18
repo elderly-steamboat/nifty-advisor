@@ -208,7 +208,7 @@ def recommend(d: date, expiry: date, cfg, sampler=None, open_margin: float = 0.0
         return Recommendation(data_ok=False, data_reason="missing: " + ", ".join(st.missing), **base)
     try:
         chain = load_chain(d, expiry, cfg)
-        fc = run_forecast(d, expiry, cfg, holidays, sampler)
+        fc = run_forecast(d, expiry, cfg, holidays, sampler, center=chain.future)
     except DataError as e:
         return Recommendation(data_ok=False, data_reason=str(e), **base)
     en = enrich_chain(chain, cfg.risk_free_rate)
@@ -256,7 +256,7 @@ def log_trade(conn, d: date, structure: str, expiry: date, legs: list[Leg], cfg,
         if (l.option_type, float(l.strike)) not in listed:
             raise ValueError(f"leg not in chain: {l.option_type} {l.strike:.0f} {expiry.isoformat()}")
     en = enrich_chain(chain, cfg.risk_free_rate)
-    fc = run_forecast(d, expiry, cfg, holidays, sampler)
+    fc = run_forecast(d, expiry, cfg, holidays, sampler, center=chain.future)
     pos = _position(structure, expiry, legs, d)
     return add_trade(conn, structure, expiry, d, legs, baseline_for(pos, chain, en, fc, cfg),
                      chain.lot_size, notes)
@@ -276,7 +276,7 @@ def check_positions(conn, d: date, cfg, sampler=None, holidays: set | None = Non
         try:
             chain = load_chain(d, pos.expiry, cfg)
             en = enrich_chain(chain, cfg.risk_free_rate)
-            fc = run_forecast(d, pos.expiry, cfg, holidays, sampler)
+            fc = run_forecast(d, pos.expiry, cfg, holidays, sampler, center=chain.future)
         except DataError as e:  # one bad position must not hide the others' warnings
             rep = RiskReport("UNKNOWN", [f"data missing: {e}"], {})
             act = Action("HOLD_PREPARE", "data missing — check this position manually")

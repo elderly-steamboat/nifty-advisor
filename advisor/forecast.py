@@ -124,9 +124,23 @@ def apply_calibration(raw_highs, raw_lows, raw_closes, k: float):
     return f(raw_highs), f(raw_lows), f(raw_closes)
 
 
-def run_forecast(d: date, expiry: date, cfg, holidays: set, sampler: Sampler | None = None) -> Forecast:
+def recenter(highs, lows, closes, spot: float, center: float):
+    """Rescale each step so the median close sits on a geometric path from spot (today) to
+    `center` (at expiry). Multiplicative per step, so the relative spread Kronos produced is kept
+    and its own drift is discarded (design §9, option A)."""
+    m = np.median(closes, axis=0)
+    h = m.size
+    target = spot * (center / spot) ** (np.arange(1, h + 1) / h)
+    f = target / m
+    return highs * f, lows * f, closes * f
+
+
+def run_forecast(d: date, expiry: date, cfg, holidays: set, sampler: Sampler | None = None,
+                 center: float | None = None) -> Forecast:
     """Kronos forecast from close of d to expiry. Raw paths cached on disk; calibration
-    multiplier cfg.calibration.k applied after loading. Config: kronos.*, calibration.k."""
+    multiplier cfg.calibration.k applied after loading, then (if kronos.recenter and `center`
+    is given, normally the futures price) the median is moved onto spot→center.
+    Config: kronos.*, calibration.k."""
     hist = load_index_history(d, cfg.kronos.context, cfg.data_dir)
     if hist.empty or hist.index[-1] != d:
         raise DataError(f"index history does not end on {d.isoformat()} — refresh data")
@@ -151,8 +165,13 @@ def run_forecast(d: date, expiry: date, cfg, holidays: set, sampler: Sampler | N
         tmp.replace(cache)
     k = cfg.calibration.k
     hi, lo, cl = apply_calibration(raw[:, :, 0], raw[:, :, 1], raw[:, :, 2], k)
-    return Forecast(d, expiry, float(hist.close.iloc[-1]), dates, hi, lo, cl, k,
-                    {"cache": cache.name, "model_id": cfg.kronos.model_id, "n_paths": int(raw.shape[0])})
+    spot = float(hist.close.iloc[-1])
+    meta = {"cache": cache.name, "model_id": cfg.kronos.model_id, "n_paths": int(raw.shape[0]),
+            "raw_p50": float(np.median(cl[:, -1]))}
+    if cfg.kronos.recenter and center is not None:
+        hi, lo, cl = recenter(hi, lo, cl, spot, center)
+        meta["center"] = float(center)
+    return Forecast(d, expiry, spot, dates, hi, lo, cl, k, meta)
 
 
 def terminal_quantiles(fc: Forecast, qs: list[float]) -> dict[float, float]:

@@ -22,7 +22,7 @@ def _copy_cfg(tmp_path, mutate):
 def test_defaults_load():
     cfg = load_config(CFG)
     assert cfg.edge.r_naked == 1.30
-    assert cfg.scoring.weights.kronos_drift == 0.35
+    assert cfg.scoring.weights.kronos_drift == 0.0 and cfg.scoring.weights.oi == 0.40 and cfg.kronos.recenter is True
     assert cfg.exits.time_exit_days == 7
     assert cfg.data_dir.is_absolute()
 

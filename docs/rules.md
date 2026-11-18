@@ -15,11 +15,18 @@ The system makes no recommendation unless all of these hold. The reason is shown
 - Kronos samples `kronos.n_paths` price paths from the chosen date to expiry, using the last
   `kronos.context` daily bars.
 - Each path's distance from the median is then multiplied by `calibration.k` (calibration).
-- Every later rule uses these calibrated paths.
+- **Re-centring (`kronos.recenter: true`, the default):** on real Nifty data Kronos leans
+  downward (about −6% over a month) and that lean is not a real forecast. So every step is
+  rescaled so its median sits on a smooth path from today's spot to the **futures price** at
+  expiry. Kronos keeps deciding *how wide* the range is; the futures price decides *where* it
+  sits. The raw Kronos median is still saved as `raw_p50` in the forecast details.
+- Every later rule uses these calibrated, re-centred paths.
 
 ## 3. Direction score, from −100 (bearish) to +100 (bullish)  [`scoring.direction_score`]
 The score is a weighted sum (`scoring.weights`) of four signals, each scaled to the range −1 to +1:
-- **Kronos drift:** (Kronos median − spot) ÷ the market's one-sigma move.
+- **Kronos drift:** (Kronos median − spot) ÷ the market's one-sigma move. Its weight is **0**
+  while re-centring is on (the median is the futures price, so it only measures carry). Direction
+  then comes from OI, trend and skew alone.
 - **OI:** the average of (a) PCR mapped linearly so that `pcr_low` → −1 and `pcr_high` → +1, and
   (b) wall asymmetry. A put wall closer to spot than the call wall counts as bullish.
 - **Trend:** the average of close vs its 20-day average, close vs its 50-day average, and the

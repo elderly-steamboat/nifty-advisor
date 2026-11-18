@@ -25,6 +25,7 @@ class Kronos(_M):
     top_p: float
     device: str
     base_seed: int
+    recenter: bool  # True: Kronos gives only the spread; centre = futures price
 
 
 class Calibration(_M):

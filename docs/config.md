@@ -17,10 +17,11 @@ config hash shown with every recommendation. Units: "pts" = Nifty index points,
 | `kronos.temperature`, `top_p` | Sampling settings | — | 1.0, 1.0 | keep 1.0 unless recalibrating |
 | `kronos.device` | Torch device | — | cpu | cpu (only cpu is reproducible) |
 | `kronos.base_seed` | Root of the deterministic seed | int | 20261118 | any |
+| `kronos.recenter` | Centre paths on the futures price; Kronos gives only the spread | bool | true | keep true unless a backtest shows Kronos's own centre helps |
 | `calibration.k` | Kronos range multiplier around median | × | 1.0 | 0.5–3.0 (fit in Plan 3) |
 | `calibration.window_cycles` | Monthly cycles used to fit k | count | 24 | ≥ 6 |
 | `calibration.target_coverage` | Target share of closes inside P10–P90 | prob | 0.80 | 0.80 |
-| `scoring.weights.*` | Direction score weights (must sum to 1) | — | .35/.25/.20/.20 | each 0–1 |
+| `scoring.weights.*` | Direction score weights (must sum to 1) | — | 0/.40/.30/.30 (drift/oi/trend/skew) | each 0–1; keep drift 0 while `kronos.recenter` is true |
 | `scoring.pcr_low` / `pcr_high` | PCR mapped to −1 / +1 | ratio | 0.7 / 1.3 | — |
 | `scoring.neutral_band` | \|score\| below = neutral | score | 20 | 10–30 |
 | `scoring.strong_band` | \|score\| at/above = strong | score | 50 | 40–70 |
